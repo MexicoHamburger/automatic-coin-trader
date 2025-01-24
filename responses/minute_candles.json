@@ -1,0 +1,17 @@
+const minuteCandles = [
+  {
+    "market": "KRW-BTC",
+    "candle_date_time_utc": "2024-09-30T23:59:00",
+    "candle_date_time_kst": "2024-10-01T08:59:00",
+    "opening_price": 83756000,
+    "high_price": 83756000,
+    "low_price": 83730000,
+    "trade_price": 83730000,
+    "timestamp": 1727740799960,
+    "candle_acc_trade_price": 93748524.53087,
+    "candle_acc_trade_volume": 1.11936358,
+    "unit": 1
+  }
+];
+
+export default minuteCandles;

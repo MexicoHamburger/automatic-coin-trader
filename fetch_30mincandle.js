@@ -5,12 +5,17 @@ const { parse } = require('json2csv');
 
 // 설정
 const url = "https://api.upbit.com/v1/candles/minutes/30";
-const market = "KRW-BTC";
+const market = "KRW-STPT";
 const count = 200; // API 최대 요청 데이터 수
-const filePath = "responses/30min_candle_1year.csv"; // 최종 저장 파일
+const filePath = "responses/STPT-30min_candle_1year.csv"; // 최종 저장 파일
 let toDate = new Date(); // 현재 시간부터 시작
+
+/*
 let oneYearAgo = new Date();
 oneYearAgo.setFullYear(toDate.getFullYear() - 1); // 1년 전
+*/
+let threeMonthsAgo = new Date();
+threeMonthsAgo.setMonth(toDate.getMonth() - 3); // 3개월 전
 
 // CSV 파일 초기화
 if (fs.existsSync(filePath)) fs.unlinkSync(filePath); // 기존 파일 삭제
@@ -48,7 +53,7 @@ async function fetchAndSaveCandles() {
       toDate = new Date(oldestCandle.candle_date_time_utc);
 
       // 1년 이전 데이터까지 도달하면 종료
-      if (toDate < oneYearAgo) {
+      if (toDate < threeMonthsAgo) {
         isFinished = true;
       }
 

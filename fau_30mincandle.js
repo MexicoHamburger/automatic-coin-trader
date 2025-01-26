@@ -3,10 +3,10 @@ const axios = require('axios');
 const { parse } = require('csv-parse/sync');
 const { stringify } = require('csv-stringify/sync');
 
-const market = 'KRW-BTC'; // 가정된 값
+const market = 'KRW-STPT'; // 가정된 값
 const count = 2; // 요청할 데이터 개수
 const url = 'https://api.upbit.com/v1/candles/minutes/30'; // API URL
-const filePath = 'responses/30min_candle_1year.csv';
+const filePath = 'responses/STPT-30min_candle_1year.csv';
 
 async function fetchData(toDate) {
     const params = {

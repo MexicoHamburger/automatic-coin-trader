@@ -5,11 +5,37 @@
 const fs = require('fs');
 const path = require('path');
 const axios = require('axios');
+const request = require('request');
+const { v4: uuidv4 } = require('uuid');
+const crypto = require('crypto');
+const sign = require('jsonwebtoken').sign;
+const queryEncode = require("querystring").encode;
+require('dotenv').config(); // 환경 변수 로드
 
 // CSV parse/stringify
 const { parse: json2csvParse } = require('json2csv');
 const { parse: csvParse } = require('csv-parse/sync');
 const { stringify: csvStringify } = require('csv-stringify/sync');
+
+const access_key = process.env.UPBIT_OPEN_API_ACCESS_KEY;
+const secret_key = process.env.UPBIT_OPEN_API_SECRET_KEY;
+const server_url = process.env.UPBIT_OPEN_API_SERVER_URL;
+
+const { show_account } = require('./show_account');
+
+function writeLog(message) {
+    const filePath = "trade.log";
+    const timestamp = new Date().toISOString();
+    const logMessage = `[${timestamp}] ${message}\n`; // 타임스탬프 추가
+
+    fs.appendFile(filePath, logMessage, (err) => {
+        if (err) {
+            console.error('Error writing to log file:', err);
+        } else {
+            console.log('Log written successfully!');
+        }
+    });
+}
 
 /***************************************
  * Step [1]: Read available markets
@@ -202,6 +228,10 @@ function checkVolumeSpike(market, filePath) {
             ` - IQR-Filtered Avg Volume: ${avgVolume}\n` +
             ` - Latest Candle Volume:  ${latestVolume}\n`
         );
+        if (latestCandle.trade_price > latestCandle.opening_price) {
+            console.log(`시가 : ${latestCandle.opening_price}, 현재가: ${latestCandle.trade_price}. 세력 작업중으로 추정`);
+            buy(market, latestCandle.trade_price);
+        }
     }
 }
 
@@ -246,7 +276,7 @@ async function updateAllMarkets(markets) {
 /***************************************
  * (C) Start a scheduler:
  *   - Step 1: full fetch once if needed
- *   - Step 2: setInterval => updateAllMarkets() every 60s
+ *   - Step 2: continuous incremental updates
  ***************************************/
 async function startScheduler() {
     // 1) Get all markets
@@ -256,16 +286,144 @@ async function startScheduler() {
     // 2) One-time full fetch for missing CSV
     await fetchAllMissingFullCandles(markets);
 
-    // 3) Now schedule incremental updates + checkVolume once per minute
-    console.log(`Starting incremental updates every 60 seconds...`);
-    await updateAllMarkets(markets); // run once immediately
+    // 3) Recursive updates: updateAllMarkets starts again immediately after finishing
+    console.log(`Starting continuous incremental updates...`);
 
-    setInterval(() => {
-        updateAllMarkets(markets)
-            .catch(err => console.error('Error in updateAllMarkets:', err));
-    }, 60_000); // 1 minute
+    async function runUpdates() {
+        try {
+            await updateAllMarkets(markets); // Run updates
+        } catch (err) {
+            console.error('Error in updateAllMarkets:', err);
+        }
+        // Immediately start the next cycle after the current one finishes
+        try {
+            await checkIfSellable();
+        } catch(err) {
+            console.error('Error in checkIfSellable:', err);
+        }
+        runUpdates();
+    }
+
+    runUpdates(); // Start the first cycle
 }
 
+async function checkIfSellable() {
+    const accounts = await show_account();
+    accounts.forEach(account => {
+        const market = `KRW-${account.currency}`;
+        const outCsvPath = path.join(__dirname, `responses/${market}-30min_candle_1year.csv`);
+        const records = readCsvToObjects(outCsvPath);
+        if (records.length === 0) {
+            return;
+        }
+        const latestCandle = records[0];
+        const latestPrice = parseFloat(latestCandle.trade_price);
+        if (latestPrice <= account.avg_buy_price * 0.95 || latestPrice >= account.avg_buy_price * 1.05) {
+            sell(market, account.balance, latestPrice);
+        }
+    });
+}
+
+function sell(market, balance, price) {
+    writeLog(`Sell Order placed for ${market}: at ${price}`);
+
+    const body = {
+        market: market,
+        side: 'ask',
+        volume: balance,
+        ord_type: 'market',
+    };
+
+    const query = queryEncode(body);
+
+    const hash = crypto.createHash('sha512');
+    const queryHash = hash.update(query, 'utf-8').digest('hex');
+
+    const payload = {
+        access_key: access_key,
+        nonce: uuidv4(),
+        query_hash: queryHash,
+        query_hash_alg: 'SHA512',
+    };
+
+    const token = sign(payload, secret_key);
+
+    const options = {
+        method: "POST",
+        url: server_url + "/v1/orders",
+        headers: { Authorization: `Bearer ${token}` },
+        json: body
+    };
+
+    request(options, (error, response, body) => {
+        if (error) {
+            console.error(`Error placing order for ${market}:`, error);
+            return;
+        }
+        console.log(`Sell Order placed for ${market}:`, body);
+    });
+
+}
+function buy(market, price) {
+    console.log(`Processing market: ${market}`);
+
+    const ignoreFilePath = 'ignorance.txt';
+
+    // Step 1: Check if ignorance.txt exists, create it if not
+    if (!fs.existsSync(ignoreFilePath)) {
+        fs.writeFileSync(ignoreFilePath, '', 'utf-8'); // Create empty file
+    }
+
+    // Step 2: Read the contents of ignorance.txt
+    const ignoredMarkets = fs.readFileSync(ignoreFilePath, 'utf-8').split('\n').map(line => line.trim()).filter(Boolean);
+
+    // Step 3: Check if the market is already in ignorance.txt
+    if (ignoredMarkets.includes(market)) {
+        console.log(`${market} is already in ignorance.txt. Skipping buy.`);
+        return; // Do nothing if market is already ignored
+    }
+
+    // Step 4: Add the market to ignorance.txt
+    fs.appendFileSync(ignoreFilePath, `${market}\n`, 'utf-8');
+    console.log(`${market} added to ignorance.txt.`);
+
+    // Step 5: Prepare and execute the buy API request
+    const body = {
+        market: market,
+        side: 'bid',
+        price: '5000',
+        ord_type: 'price',
+    };
+
+    const query = queryEncode(body);
+
+    const hash = crypto.createHash('sha512');
+    const queryHash = hash.update(query, 'utf-8').digest('hex');
+
+    const payload = {
+        access_key: access_key,
+        nonce: uuidv4(),
+        query_hash: queryHash,
+        query_hash_alg: 'SHA512',
+    };
+
+    const token = sign(payload, secret_key);
+
+    const options = {
+        method: "POST",
+        url: server_url + "/v1/orders",
+        headers: { Authorization: `Bearer ${token}` },
+        json: body
+    };
+
+    request(options, (error, response, body) => {
+        if (error) {
+            console.error(`Error placing order for ${market}:`, error);
+            return;
+        }
+        writeLog(`Buy Order placed for ${market}: at ${price}`);
+    });
+}
 /***************************************
  * Run it
  ***************************************/

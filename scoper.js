@@ -25,7 +25,7 @@ const { show_account } = require('./show_account');
 
 function writeLog(message) {
     const filePath = "trade.log";
-    const timestamp = new Date().toISOString();
+    const timestamp = new Date().toLocaleString();
     const logMessage = `[${timestamp}] ${message}\n`; // 타임스탬프 추가
 
     fs.appendFile(filePath, logMessage, (err) => {
@@ -222,14 +222,15 @@ function checkVolumeSpike(market, filePath) {
     const latestCandle = records[0];
     const latestVolume = parseFloat(latestCandle.candle_acc_trade_volume);
 
-    if (latestVolume > 20 * avgVolume) {
+    if (latestVolume > 15 * avgVolume) {
         console.log(
             `\n[Volume Spike Detected] Market: ${market}\n` +
             ` - IQR-Filtered Avg Volume: ${avgVolume}\n` +
             ` - Latest Candle Volume:  ${latestVolume}\n`
         );
-        if (latestCandle.trade_price > latestCandle.opening_price) {
-            console.log(`시가 : ${latestCandle.opening_price}, 현재가: ${latestCandle.trade_price}. 세력 작업중으로 추정`);
+        if (((latestCandle.trade_price - latestCandle.opening_price) / latestCandle.opening_price) * 100 > 1.5) {
+            writeLog(`${market}의 시가 : ${latestCandle.opening_price}, 현재가: ${latestCandle.trade_price}. 
+                증가폭 ${((latestCandle.trade_price - latestCandle.opening_price) / latestCandle.opening_price) * 100}%. 세력 작업중으로 추정`);
             buy(market, latestCandle.trade_price);
         }
     }
@@ -298,7 +299,7 @@ async function startScheduler() {
         // Immediately start the next cycle after the current one finishes
         try {
             await checkIfSellable();
-        } catch(err) {
+        } catch (err) {
             console.error('Error in checkIfSellable:', err);
         }
         runUpdates();
@@ -318,15 +319,30 @@ async function checkIfSellable() {
         }
         const latestCandle = records[0];
         const latestPrice = parseFloat(latestCandle.trade_price);
-        if (latestPrice <= account.avg_buy_price * 0.95 || latestPrice >= account.avg_buy_price * 1.05) {
+        if (latestPrice <= account.avg_buy_price * 0.97 || latestPrice >= account.avg_buy_price * 1.05) {
             sell(market, account.balance, latestPrice);
         }
     });
 }
 
-function sell(market, balance, price) {
-    writeLog(`Sell Order placed for ${market}: at ${price}`);
+function removeMarketFromIgnoreList(market) {
+    const ignoreFilePath = path.join(__dirname, 'ignorance.txt');
 
+    if (!fs.existsSync(ignoreFilePath)) {
+        console.log(`Ignore list file not found: ${ignoreFilePath}`);
+        return;
+    }
+
+    const fileContent = fs.readFileSync(ignoreFilePath, 'utf-8');
+    const lines = fileContent.split('\n');
+
+    const updatedLines = lines.filter(line => line.trim() !== market.trim());
+
+    fs.writeFileSync(ignoreFilePath, updatedLines.join('\n'), 'utf-8');
+    console.log(`Removed ${market} from ignorance.txt`);
+}
+
+function sell(market, balance, price) {
     const body = {
         market: market,
         side: 'ask',
@@ -360,7 +376,8 @@ function sell(market, balance, price) {
             console.error(`Error placing order for ${market}:`, error);
             return;
         }
-        console.log(`Sell Order placed for ${market}:`, body);
+        writeLog(`Sell Order placed for ${market}: at ${price}`);
+        removeMarketFromIgnoreList(market);
     });
 
 }
@@ -391,7 +408,7 @@ function buy(market, price) {
     const body = {
         market: market,
         side: 'bid',
-        price: '5000',
+        price: '5500',
         ord_type: 'price',
     };
 
